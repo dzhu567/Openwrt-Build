@@ -1,4 +1,4 @@
-name: OpenWrt x86_64 Optimized Build
+name: OpenWrt x86_64 ai Build
 
 on:
   workflow_dispatch:
