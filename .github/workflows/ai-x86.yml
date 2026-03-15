@@ -2,7 +2,8 @@ name: OpenWrt x86_64 ai Build
 
 on:
   workflow_dispatch:
-    inputs:
+  schedule:
+    - cron: '0 0 * * 3'
       target_arch:
         description: '目标架构'
         required: false
