@@ -1,0 +1,248 @@
+
+name: OpenWrt x86_64 ai Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: '目标架构'
+        required: false
+        default: 'x86_64'
+      custom_config:
+        description: '自定义配置文件URL(可选)'
+        required: false
+  schedule:
+    - cron: '0 2 * * 1,4'  # 每周一、四凌晨2点执行
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-openwrt.yml'
+      - 'configs/**'
+
+env:
+  TARGET_ARCH: x86_64
+  BUILD_THREADS: 4
+  CCACHE_DIR: /tmp/ccache
+
+jobs:
+  prepare:
+    name: 准备构建环境
+    runs-on: ubuntu-22.04
+    outputs:
+      should_build: ${{ steps.version_check.outputs.should_build }}
+      latest_tag: ${{ steps.get_release.outputs.tag }}
+      build_date: ${{ steps.date.outputs.date }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: 获取系统时间
+        id: date
+        run: echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+      
+      - name: 设置更高线程数
+        run: |
+          CORES=$(nproc)
+          echo "BUILD_THREADS=$((CORES > 8 ? 8 : CORES))" >> $GITHUB_ENV
+      
+      - name: 检查最新稳定版
+        id: get_release
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/openwrt/openwrt/releases/latest | jq -r ".tag_name")
+          if [[ -z "$TAG" || "$TAG" == "null" ]]; then
+            echo "获取版本失败，尝试备用方式..."
+            TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git | \
+                  awk -F/ '{print $NF}' | grep -E '^v[0-9]' | grep -v 'rc\|beta' | sort -V | tail -n1)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::无法获取OpenWrt最新版本号"
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "✅ 当前最新版本: $TAG"
+
+      - name: 恢复版本缓存
+        id: version_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .last_build_info
+          key: version-info-${{ runner.os }}
+      
+      - name: 版本对比决策
+        id: version_check
+        run: |
+          PREV_TAG=""
+          if [[ -f .last_build_info ]]; then
+            source .last_build_info
+          fi
+          
+          CURRENT_TAG="${{ steps.get_release.outputs.tag }}"
+          if [[ "$PREV_TAG" == "$CURRENT_TAG" ]]; then
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "🔄 版本无更新 ($CURRENT_TAG)，跳过构建"
+          else
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "🚀 发现新版本! ($PREV_TAG → $CURRENT_TAG)"
+          fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    name: 构建OpenWrt固件
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 最大化可用磁盘空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 3072
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          overprovision-lvm: 'true'
+        
+      - name: 初始化构建环境
+        run: |
+          df -h
+          sudo apt-get update
+          sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+              bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+              git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+              libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
+              mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pip \
+              libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
+              vim wget xmlto xxd zlib1g-dev
+          
+      - name: 设置ccache加速编译
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 2G
+          verbose: 2
+          save: true
+          restore: true
+          
+      - name: 检出OpenWrt源码
+        run: |
+          git config --global user.name "OpenWrt Builder"
+          git config --global user.email "builder@openwrt.local"
+          git clone --depth=1 -b ${{ needs.prepare.outputs.latest_tag }} \
+                    https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo "src-git packages https://github.com/openwrt/packages.git;${{ needs.prepare.outputs.latest_tag }}" > feeds.conf.default
+          echo "src-git luci https://github.com/openwrt/luci.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+          echo "src-git routing https://github.com/openwrt/routing.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+            echo "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;${{ needs.prepare.outputs.latest_tag }}" > feeds.conf.default
+          echo "src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+          echo "src-git rtp2httpd https://github.com/stackia/rtp2httpd.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+        echo "src-git msd_lite https://github.com/ximiTech/luci-app-msd_lite.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+       echo "src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;${{ needs.prepare.outputs.latest_tag }}" >> feeds.conf.default
+      - name: 更新并安装软件包索引
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+      - name: 应用定制配置
+       
+      run: |
+          cd openwrt
+          # 使用通用x86_64配置作为基础
+          make defconfig
+          # 启用常用功能
+          sed -i 's/CONFIG_TARGET_x86=y/# CONFIG_TARGET_x86 is not set/g' .config
+          sed -i 's/CONFIG_TARGET_x86_64_DEVICE_generic=y/# CONFIG_TARGET_x86_64_DEVICE_generic is not set/g' .config
+          echo "CONFIG_TARGET_x86_64=y" >> .config
+          echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-opkg=y" >> .config
+          echo "CONFIG_PACKAGE_iperf3=y" >> .config
+          echo "CONFIG_PACKAGE_htop=y" >> .config
+          echo "CONFIG_PACKAGE_nano=y" >> .config
+          echo "CONFIG_PACKAGE_usbutils=y" >> .config
+          echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+          make defconfig
+          
+      - name: 下载构建依赖
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -delete  # 清理无效下载
+          
+      - name: 并行编译固件
+        run: |
+          cd openwrt
+          echo "开始编译，使用 ${{ env.BUILD_THREADS }} 线程..."
+          make -j${{ env.BUILD_THREADS }} V=s || make -j1 V=s
+          
+      - name: 整理构建成果
+        run: |
+          cd openwrt
+          mkdir -p firmware_output
+          cp -r bin/targets/* firmware_output/
+          ls -R firmware_output/
+          
+          # 记录构建信息
+          cat > .last_build_info << EOF
+          PREV_TAG=${{ needs.prepare.outputs.latest_tag }}
+          BUILD_DATE=${{ needs.prepare.outputs.build_date }}
+          RUNNER_OS=${{ runner.os }}
+          EOF
+          
+      - name: 保存版本记录缓存
+        uses: actions/cache/save@v4
+        with:
+          path: .last_build_info
+          key: version-info-${{ runner.os }}-${{ needs.prepare.outputs.latest_tag }}
+          
+      - name: 创建发布草稿
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.prepare.outputs.latest_tag }}.${{ needs.prepare.outputs.build_date }}
+          name: OpenWrt ${{ needs.prepare.outputs.latest_tag }} for x86_64 (${{ needs.prepare.outputs.build_date }})
+          draft: true
+          prerelease: false
+          body: |
+            ## 📦 OpenWrt ${ {needs.prepare.outputs.latest_tag} } for x86_64
+            
+            ✅ 自动构建完成于 ${{ needs.prepare.outputs.build_date }}
+            
+            ### 🔧 固件特性
+            - 基于官方稳定版 ${{ needs.prepare.outputs.latest_tag }}
+            - 集成LuCI Web管理界面
+            - 内置常用工具(ipref3, htop, nano等)
+            - IPv6支持已启用
+            - USB设备驱动支持
+            
+            ### 🚀 性能优化
+            - 采用ccache加速二次编译
+            - 多线程并行构建提升速度
+            - 精心调优的标准配置
+            
+            ---
+            💡 如需个性化配置，请提交Issue或使用workflow_dispatch手动构建
+            
+          artifacts: "openwrt/firmware_output/**/*.img,openwrt/firmware_output/**/*.bin"
+          
+      - name: 上传临时构件
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-firmware-${{ needs.prepare.outputs.latest_tag }}
+          path: |
+            openwrt/firmware_output/
+            .last_build_info
+          retention-days: 14
+          
+  cleanup:
+    needs: [prepare, build]
+    if: always()
+    name: 清理工作区
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 移除大型中间文件
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
