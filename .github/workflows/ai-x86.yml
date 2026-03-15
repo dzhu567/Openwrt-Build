@@ -138,7 +138,7 @@ jobs:
           echo "src-git-full passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git" >> feeds.conf.default
            echo "src-git-full lucky https://github.com/sirpdboy/luci-app-lucky.git" >> feeds.conf.default
           echo "src-git-full rtp2httpd https://github.com/stackia/rtp2httpd.git" >> feeds.conf.default
-         ./scripts/feeds update -a
+          ./scripts/feeds update -a
           ./scripts/feeds install -a
           
       - name: 配置固件
@@ -200,7 +200,7 @@ jobs:
           CONFIG_PACKAGE_luci-app-msd_lite=y
           CONFIG_PACKAGE_luci-app-rtp2httpd=y
          
- # 存储服务
+          # 存储服务
           CONFIG_PACKAGE_luci-app-diskman=y
           CONFIG_PACKAGE_luci-app-samba4=y
           
