@@ -10,8 +10,10 @@ on:
       custom_config:
         description: '自定义配置文件URL(可选)'
         required: false
-  schedule:
-    - cron: '0 2 * * 4'  # 每周四凌晨2点执行
+   schedule:
+  on:
+    repository_dispatch:
+    workflow_dispatch:
 
 env:
   TARGET_ARCH: x86_64
