@@ -1,4 +1,4 @@
-name: OpenWrt x86_64 ai Build
+name: OpenWrt x86 ai Build
 
 on:
   workflow_dispatch:
@@ -120,11 +120,7 @@ jobs:
             https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
           
-      - name: 更新feeds
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+    
           
       - name: 添加自定义feeds
         run: |
@@ -138,7 +134,7 @@ jobs:
           echo "src-git-full passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git" >> feeds.conf.default
            echo "src-git-full lucky https://github.com/sirpdboy/luci-app-lucky.git" >> feeds.conf.default
           echo "src-git-full rtp2httpd https://github.com/stackia/rtp2httpd.git" >> feeds.conf.default
-         ./scripts/feeds update -a
+          ./scripts/feeds update -a
           ./scripts/feeds install -a
           
       - name: 配置固件
