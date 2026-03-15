@@ -141,6 +141,29 @@ jobs:
       - name: 应用定制配置
         run: |
           cd openwrt
+            # ==========================================
+      # 模块化调用阶段 (调用你写的外部脚本)
+      # ==========================================
+
+      - name: Load custom Feeds (check_feeds.sh)
+        if: steps.compare.outputs.should_build == 'true'
+        run: |
+          bash scripts/check_feeds.sh
+
+      - name: Load External Packages (ext_packages.sh)
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          bash ../scripts/ext_packages.sh
+
+      - name: Apply Custom Configuration (customize.sh & .config)
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          cp ../config/.config .config
+          if [ -f ../config/customize.sh ]; then
+            bash ../config/customize.sh
+          fi
           # 使用通用x86_64配置作为基础
           make defconfig
           # 启用常用功能
