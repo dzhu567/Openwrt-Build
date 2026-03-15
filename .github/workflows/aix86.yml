@@ -146,11 +146,12 @@ jobs:
           cd openwrt
           # 这里可以添加自定义配置逻辑
           # 如果提供了自定义配置URL，则下载并应用
-          if [ -n "${{ github.event.inputs.custom_config }}" ]; then
-            wget -O .config "${{ github.event.inputs.custom_config }}"
-          else
-            # 使用默认配置
-            make defconfig
+         if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          cp ../config/.config .config
+          if [ -f ../config/customize.sh ]; then
+            bash ../config/customize.sh
           fi
 
       - name: 下载依赖包
