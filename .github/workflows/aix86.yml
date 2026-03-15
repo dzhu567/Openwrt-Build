@@ -1,9 +1,9 @@
-name: OpenWrt x86ai Build
+name: OpenWrt x86_64 Build
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 3'
+    - cron: '0 0 * * 3'  # UTC每周三00:00 (北京时间08:00)
 
 jobs:
   build:
@@ -13,191 +13,86 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev libssl-dev \
+          python3 unzip jq rsync qemu-utils
 
-      # 【修改点 1：修复缓存读取逻辑】
-      - name: Restore last built version cache
-        id: cache-version
+      # 版本控制模块
+      - name: Restore build version cache
+        id: version-cache
         uses: actions/cache/restore@v4
         with:
           path: last_build_version.txt
-          key: last-build-version-
-          restore-keys: |
-            last-build-version-
+          key: openwrt-version-cache
 
-      - name: Get latest OpenWrt stable release tag
-        id: get_latest_tag
+      - name: Get latest stable release
+        id: get_tag
         run: |
-          TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | grep -v 'rc' | sort -V | tail -n1)
-          if [ -z "$TAG" ]; then
-            echo "❌ Failed to fetch latest tag. Stop build."
-            exit 1
-          fi
+          TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git \
+          | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | grep -v 'rc' | sort -V | tail -n1)
           echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Compare versions
+      - name: Version comparison
         id: compare
         run: |
-          # 增加文件存在性检查，防止首次运行或缓存丢失时报错
-          if [ ! -f last_build_version.txt ]; then
-            LAST_VER="none"
-          else
-            LAST_VER=$(cat last_build_version.txt)
-          fi
-          
-          LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          if [ "$LAST_VER" = "$LATEST_TAG" ]; then
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          fi
+          [ -f last_build_version.txt ] && LAST_VER=$(cat last_build_version.txt) || LAST_VER="null"
+          [ "$LAST_VER" = "${{ steps.get_tag.outputs.latest_tag }}" ] \
+          && echo "build_flag=false" >> $GITHUB_OUTPUT \
+          || echo "build_flag=true" >> $GITHUB_OUTPUT
 
-      - name: Build skipped notice
-        if: steps.compare.outputs.should_build == 'false'
-        run: echo "🚫 No build performed because there's no new version."
+      - name: Skip build notice
+        if: steps.compare.outputs.build_flag == 'false'
+        run: echo "🔄 Current version ${{ steps.get_tag.outputs.latest_tag }} already built"
 
-      - name: Free up disk space
-        if: steps.compare.outputs.should_build == 'true'
+      # 构建模块
+      - name: Free disk space
+        if: steps.compare.outputs.build_flag == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
           android: true
           dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
 
-      - name: Show available disk space
-        if: steps.compare.outputs.should_build == 'true'
-        run: df -h
-
-      - name: Install dependencies
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Prepare build environment
+        if: steps.compare.outputs.build_flag == 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev rsync unzip zlib1g-dev file wget python3-pyelftools ccache ash
+          git clone https://github.com/openwrt/openwrt.git -b ${{ steps.get_tag.outputs.latest_tag }}
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-      # 【修改点 2：Go 版本设为 stable】
-      - name: Set up Go
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-          cache: false
-
-      - name: Verify Go version
-        if: steps.compare.outputs.should_build == 'true'
-        run: go version
-
-      - name: Clone OpenWrt source
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Configure target
+        if: steps.compare.outputs.build_flag == 'true'
         run: |
-          TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          echo "Cloning branch/tag: $TAG"
-          git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git openwrt
-
-      # ==========================================
-      # 模块化调用阶段 (调用你写的外部脚本)
-      # ==========================================
-
-      - name: Load custom Feeds (check_feeds.sh)
-        if: steps.compare.outputs.should_build == 'true'
-        run: |
-          bash scripts/check_feeds.sh
-
-      - name: Load External Packages (ext_packages.sh)
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
-        run: |
-          bash ../scripts/ext_packages.sh
-
-      - name: Apply Custom Configuration (customize.sh & .config)
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
-        run: |
-          cp ../config/.config .config
-          if [ -f ../config/customize.sh ]; then
-            bash ../config/customize.sh
-          fi
-
-      # ==========================================
-      # 编译与发布阶段
-      # ==========================================
-
-      - name: Make defconfig and download sources
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
-        run: |
+          cd openwrt
+          printf "CONFIG_TARGET_x86=y\nCONFIG_TARGET_x86_64=y\n" > .config
           make defconfig
-          make download -j8
 
-      # 【核心修改点：加入解决 Rust 报错的终极参数】
-      - name: Build OpenWrt x86_64
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
+      - name: Compile firmware
+        if: steps.compare.outputs.build_flag == 'true'
+        env:
+          GITHUB_ACTIONS: "false"  # 绕过Rust CI检测
+          CARGO_BUILD_JOBS: 2      # 限制并发防OOM
         run: |
-          echo -e "$(nproc) thread compile"
-          
-          # 骗过 Rust 编译脚本，强制从源码稳妥编译 LLVM，解决 CI 环境下载失败的问题
-          export GITHUB_ACTIONS=false
-          
-          # 限制 Cargo 构建并发数，防止 GitHub Actions 内存溢出 (OOM)
-          export CARGO_BUILD_JOBS=2
-          
-          make -j$(nproc) || make -j1 V=s
+          cd openwrt
+          make -j$(($(nproc)-1)) || make -j1 V=s
 
-      - name: Get build time
-        if: steps.compare.outputs.should_build == 'true'
-        id: buildtime
-        run: echo "time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+      # 输出模块
+      - name: Save build version
+        if: steps.compare.outputs.build_flag == 'true'
+        run: echo "${{ steps.get_tag.outputs.latest_tag }}" > last_build_version.txt
 
-      # 【修改点：产物路径使用通配符，防止文件名变动导致上传失败】
-      - name: Create GitHub Release and upload firmware
-        if: steps.compare.outputs.should_build == 'true'
-        uses: ncipollo/release-action@v1
+      - name: Upload artifact
+        if: steps.compare.outputs.build_flag == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.get_latest_tag.outputs.latest_tag }}
-          name: OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
-          body: |
-            🎉 OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
-            📅 构建时间：${{ steps.buildtime.outputs.time }}
-            🔗 上游源码：https://github.com/openwrt/openwrt/tree/${{ steps.get_latest_tag.outputs.latest_tag }}
-          artifacts: openwrt/bin/targets/x86/64/*.img.gz
-          makeLatest: true
-          skipIfReleaseExists: true
+          name: openwrt-x86_64-${{ steps.get_tag.outputs.latest_tag }}
+          path: openwrt/bin/targets/x86/64/*.img.gz
 
-      - name: Save latest built version to file
-        if: steps.compare.outputs.should_build == 'true'
-        run: echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > last_build_version.txt
-
-      # 【修改点 1 延续：正确保存缓存以供下次对比】
-      - name: Save last built version cache
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Update version cache
         uses: actions/cache/save@v4
         with:
           path: last_build_version.txt
-          key: last-build-version-${{ github.run_id }}
-      - name: Upload OpenWrt Firmware to Release
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: openwrt-x86-64-firmware
-          path: |
-            openwrt/bin/targets/x86/64/*.img.gz
-            openwrt/bin/targets/x86/64/*.squashfs-combined.img
-            openwrt/bin/targets/x86/64/*.manifest
-
-      - name: Create GitHub Release
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ steps.get_latest_tag.outputs.latest_tag }}
-          release_name: OpenWrt ${{ steps.get_latest_tag.outputs.latest_tag }} (x86_64)
-          body: |
-            Auto-generated build from GitHub Actions on ${{ steps.buildtime.outputs.time }}
-
-            ✅ Built from: ${{ steps.get_latest_tag.outputs.latest_tag }}
-            📦 Artifacts: ${{
-              join 
+          key: ${{ steps.version-cache.output.cache-primary-key }}
