@@ -22,7 +22,7 @@ env:
 
 jobs:
   prepare:
-    name: 准备构建环境
+    - name: 准备构建环境
     runs-on: ubuntu-22.04
     outputs:
       should_build: ${{ steps.version_check.outputs.should_build }}
