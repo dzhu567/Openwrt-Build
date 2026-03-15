@@ -11,8 +11,8 @@ on:
       custom_config:
         description: '自定义配置文件URL(可选)'
         required: false
-   schedule:
-  on:
+   
+ on:
     repository_dispatch:
     workflow_dispatch:
 
