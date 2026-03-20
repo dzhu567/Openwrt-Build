@@ -70,12 +70,12 @@ count=$(echo "$eth_ifaces" | wc -l)
 
 if echo "$arch" | grep -qiE 'x86_64|i[3-6]86|amd64'; then
     if [ "$count" -gt 2 ]; then
-        wan_if="eth1"
+        wan_if="eth3"
         lan_if=$(echo "$eth_ifaces" | grep -v "^$wan_if$" | tr '\n' ' ' | sed 's/ $//')
         ucidef_set_interfaces_lan_wan "$lan_if" "$wan_if"
     else
-        ucidef_set_interfaces_lan_wan "eth0" "eth1"
-        wan_if="eth1"
+        ucidef_set_interfaces_lan_wan "eth0" "eth1" "eth2" "eth3"
+        wan_if="eth3"
     fi
 else
     if [ "$count" -gt 2 ]; then
