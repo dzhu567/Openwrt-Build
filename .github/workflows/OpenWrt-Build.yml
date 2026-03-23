@@ -8,38 +8,46 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 使用更大内存的 runner
+    strategy:
+      matrix:
+        # 可以配置多个架构
+        target: [x86/64]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 【修改点 1：修复缓存读取逻辑】
+      # 版本缓存
       - name: Restore last built version cache
         id: cache-version
         uses: actions/cache/restore@v4
         with:
           path: last_build_version.txt
-          key: last-build-version-
+          key: last-build-version-${{ github.ref }}
           restore-keys: |
             last-build-version-
 
       - name: Get latest OpenWrt stable release tag
         id: get_latest_tag
         run: |
-          TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | grep -v 'rc' | sort -V | tail -n1)
-          if [ -z "$TAG" ]; then
-            echo "❌ Failed to fetch latest tag. Stop build."
-            exit 1
+          # 从官方仓库获取最新稳定版标签
+          LATEST_TAG=$(curl -s https://api.github.com/repos/openwrt/openwrt/tags | jq -r '.[] | select(.name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .name' | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            # 如果 API 失败，使用备用方法
+            LATEST_TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | head -1)
           fi
-          echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
 
       - name: Compare versions
         id: compare
         run: |
-          # 增加文件存在性检查，防止首次运行或缓存丢失时报错
           if [ ! -f last_build_version.txt ]; then
             LAST_VER="none"
           else
@@ -47,15 +55,20 @@ jobs:
           fi
           
           LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
+          echo "Last version: $LAST_VER"
+          echo "Latest version: $LATEST_TAG"
+          
           if [ "$LAST_VER" = "$LATEST_TAG" ]; then
             echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "🚫 No new version, skipping build"
           else
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "✅ New version found, proceeding with build"
           fi
 
       - name: Build skipped notice
         if: steps.compare.outputs.should_build == 'false'
-        run: echo "🚫 No build performed because there's no new version."
+        run: echo "🚫 Build skipped: ${{ steps.get_latest_tag.outputs.latest_tag }} already built."
 
       - name: Free up disk space
         if: steps.compare.outputs.should_build == 'true'
@@ -70,89 +83,172 @@ jobs:
 
       - name: Show available disk space
         if: steps.compare.outputs.should_build == 'true'
-        run: df -h
+        run: |
+          df -h
+          free -h
 
       - name: Install dependencies
         if: steps.compare.outputs.should_build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev rsync unzip zlib1g-dev file wget python3-pyelftools ccache ash
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            rsync unzip zlib1g-dev file wget python3 python3-pyelftools \
+            ccache ash gperf help2man time xsltproc zlib1g-dev \
+            libxml-parser-perl libyaml-perl
 
-      # 【修改点 2：Go 版本设为 stable】
       - name: Set up Go
         if: steps.compare.outputs.should_build == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: '1.21'
           cache: false
-
-      - name: Verify Go version
-        if: steps.compare.outputs.should_build == 'true'
-        run: go version
 
       - name: Clone OpenWrt source
         if: steps.compare.outputs.should_build == 'true'
         run: |
           TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          echo "Cloning branch/tag: $TAG"
+          echo "📥 Cloning OpenWrt tag: $TAG"
           git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git openwrt
+          
+          # 进入目录
+          cd openwrt
+          echo "📁 OpenWrt source cloned at: $(pwd)"
+
+      # 恢复编译缓存（如果可用）
+      - name: Restore build cache
+        if: steps.compare.outputs.should_build == 'true'
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/build_dir
+            openwrt/staging_dir
+            ~/.ccache
+          key: ${{ runner.os }}-openwrt-${{ matrix.target }}-${{ steps.get_latest_tag.outputs.latest_tag }}-${{ hashFiles('config/.config', 'scripts/**', 'config/**') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-${{ matrix.target }}-${{ steps.get_latest_tag.outputs.latest_tag }}-
+            ${{ runner.os }}-openwrt-${{ matrix.target }}-
 
       # ==========================================
-      # 模块化调用阶段 (调用你写的外部脚本)
+      # 模块化调用阶段
       # ==========================================
 
       - name: Load custom Feeds (check_feeds.sh)
         if: steps.compare.outputs.should_build == 'true'
         run: |
-          bash scripts/check_feeds.sh
+          if [ -f scripts/check_feeds.sh ]; then
+            echo "📦 Loading custom feeds..."
+            bash scripts/check_feeds.sh
+          else
+            echo "⚠️  check_feeds.sh not found, skipping"
+          fi
 
       - name: Load External Packages (ext_packages.sh)
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
         run: |
-          bash ../scripts/ext_packages.sh
+          if [ -f ../scripts/ext_packages.sh ]; then
+            echo "📦 Loading external packages..."
+            bash ../scripts/ext_packages.sh
+          else
+            echo "⚠️  ext_packages.sh not found, skipping"
+          fi
 
-      - name: Apply Custom Configuration (customize.sh & .config)
+      - name: Apply Custom Configuration
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
         run: |
-          cp ../config/.config .config
+          echo "⚙️ Applying custom configuration..."
+          
+          # 复制 .config
+          if [ -f ../config/.config ]; then
+            cp ../config/.config .config
+            echo "✅ .config copied"
+          else
+            echo "⚠️  .config not found, using default"
+          fi
+          
+          # 运行自定义脚本
           if [ -f ../config/customize.sh ]; then
+            echo "🔧 Running customize.sh..."
             bash ../config/customize.sh
+          else
+            echo "⚠️  customize.sh not found, skipping"
           fi
 
       # ==========================================
-      # 编译与发布阶段
+      # 编译阶段
       # ==========================================
 
       - name: Make defconfig and download sources
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
         run: |
+          echo "🔧 Running defconfig..."
           make defconfig
-          make download -j8
+          
+          echo "📥 Downloading sources..."
+          make download -j$(nproc) || make download -j1 V=s
+          
+          # 检查下载是否完整
+          make -j1 V=s download 2>&1 | tail -20
 
-      # 【核心修改点：加入解决 Rust 报错的终极参数】
       - name: Build OpenWrt x86_64
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
+        env:
+          # Rust 编译优化参数
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          CARGO_HTTP_MULTIPLEXING: "false"
+          CARGO_HTTP_TIMEOUT: "300"
+          RUSTUP_DIST_SERVER: "https://mirrors.ustc.edu.cn/rust-static"
+          RUSTUP_UPDATE_ROOT: "https://mirrors.ustc.edu.cn/rust-static/rustup"
+          # 内存限制
+          CARGO_BUILD_JOBS: 2
+          MAKE_JOBS: $(nproc)
         run: |
-          echo -e "$(nproc) thread compile"
+          echo "🚀 Starting build with $(nproc) threads..."
           
-          # 骗过 Rust 编译脚本，强制从源码稳妥编译 LLVM，解决 CI 环境下载失败的问题
-          export GITHUB_ACTIONS=false
+          # 设置编译环境
+          export FORCE_UNSAFE_CONFIGURE=1
           
-          # 限制 Cargo 构建并发数，防止 GitHub Actions 内存溢出 (OOM)
-          export CARGO_BUILD_JOBS=2
+          # 尝试并行编译，如果失败则单线程详细输出
+          time make -j$(nproc) || {
+            echo "⚠️ Parallel build failed, retrying with single thread..."
+            time make -j1 V=s
+          }
           
-          make -j$(nproc) || make -j1 V=s
+          echo "✅ Build completed!"
+
+      # 保存编译缓存
+      - name: Save build cache
+        if: steps.compare.outputs.should_build == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/build_dir
+            openwrt/staging_dir
+            ~/.ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
 
       - name: Get build time
         if: steps.compare.outputs.should_build == 'true'
         id: buildtime
-        run: echo "time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+        run: |
+          echo "time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "date=$(date '+%Y%m%d')" >> $GITHUB_OUTPUT
 
-      # 【修改点：产物路径使用通配符，防止文件名变动导致上传失败】
+      - name: List build artifacts
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          echo "📁 Build artifacts:"
+          find bin/targets/x86/64 -name "*.img.gz" -o -name "*.manifest" -o -name "*.buildinfo" | xargs ls -lh
+
       - name: Create GitHub Release and upload firmware
         if: steps.compare.outputs.should_build == 'true'
         uses: ncipollo/release-action@v1
@@ -162,20 +258,42 @@ jobs:
           name: OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
           body: |
             🎉 OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
+            
             📅 构建时间：${{ steps.buildtime.outputs.time }}
+            
+            🏗️ 目标架构：${{ matrix.target }}
+            
             🔗 上游源码：https://github.com/openwrt/openwrt/tree/${{ steps.get_latest_tag.outputs.latest_tag }}
-          artifacts: openwrt/bin/targets/x86/64/*.img.gz
+            
+            ⚙️ 使用本工作流构建：[查看工作流](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            📦 包含固件格式：
+            - combined-ext4.img.gz
+            - combined-squashfs.img.gz
+            - rootfs-ext4.img.gz
+            - rootfs-squashfs.img.gz
+            
+            🔧 自定义配置：
+            - 已应用自定义 feeds
+            - 已添加外部软件包
+            - 已应用自定义配置
+            
+            ---
+            
+            *自动构建于 ${{ steps.buildtime.outputs.time }}*
+          artifacts: "openwrt/bin/targets/x86/64/*.img.gz,openwrt/bin/targets/x86/64/*.manifest,openwrt/bin/targets/x86/64/*.buildinfo"
           makeLatest: true
           skipIfReleaseExists: true
+          allowUpdates: true
 
-      - name: Save latest built version to file
+      - name: Save latest built version
         if: steps.compare.outputs.should_build == 'true'
         run: echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > last_build_version.txt
 
-      # 【修改点 1 延续：正确保存缓存以供下次对比】
       - name: Save last built version cache
         if: steps.compare.outputs.should_build == 'true'
         uses: actions/cache/save@v4
         with:
           path: last_build_version.txt
-          key: last-build-version-${{ github.run_id }}
+          key: last-build-version-${{ github.ref }}-${{ github.run_id }}
+          save-if: ${{ steps.compare.outputs.should_build == 'true' }}
