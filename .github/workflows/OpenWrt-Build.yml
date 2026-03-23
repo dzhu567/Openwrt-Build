@@ -8,12 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 使用更大内存的 runner
-    strategy:
-      matrix:
-        # 可以配置多个架构
-        target: [x86/64]
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,7 +18,6 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 版本缓存
       - name: Restore last built version cache
         id: cache-version
         uses: actions/cache/restore@v4
@@ -36,10 +30,8 @@ jobs:
       - name: Get latest OpenWrt stable release tag
         id: get_latest_tag
         run: |
-          # 从官方仓库获取最新稳定版标签
           LATEST_TAG=$(curl -s https://api.github.com/repos/openwrt/openwrt/tags | jq -r '.[] | select(.name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .name' | head -1)
           if [ -z "$LATEST_TAG" ]; then
-            # 如果 API 失败，使用备用方法
             LATEST_TAG=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | head -1)
           fi
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
@@ -112,11 +104,9 @@ jobs:
           echo "📥 Cloning OpenWrt tag: $TAG"
           git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git openwrt
           
-          # 进入目录
           cd openwrt
           echo "📁 OpenWrt source cloned at: $(pwd)"
 
-      # 恢复编译缓存（如果可用）
       - name: Restore build cache
         if: steps.compare.outputs.should_build == 'true'
         id: cache-restore
@@ -127,16 +117,12 @@ jobs:
             openwrt/build_dir
             openwrt/staging_dir
             ~/.ccache
-          key: ${{ runner.os }}-openwrt-${{ matrix.target }}-${{ steps.get_latest_tag.outputs.latest_tag }}-${{ hashFiles('config/.config', 'scripts/**', 'config/**') }}
+          key: ${{ runner.os }}-openwrt-x86_64-${{ steps.get_latest_tag.outputs.latest_tag }}-${{ hashFiles('config/.config', 'scripts/**', 'config/**') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ matrix.target }}-${{ steps.get_latest_tag.outputs.latest_tag }}-
-            ${{ runner.os }}-openwrt-${{ matrix.target }}-
+            ${{ runner.os }}-openwrt-x86_64-${{ steps.get_latest_tag.outputs.latest_tag }}-
+            ${{ runner.os }}-openwrt-x86_64-
 
-      # ==========================================
-      # 模块化调用阶段
-      # ==========================================
-
-      - name: Load custom Feeds (check_feeds.sh)
+      - name: Load custom Feeds
         if: steps.compare.outputs.should_build == 'true'
         run: |
           if [ -f scripts/check_feeds.sh ]; then
@@ -146,7 +132,7 @@ jobs:
             echo "⚠️  check_feeds.sh not found, skipping"
           fi
 
-      - name: Load External Packages (ext_packages.sh)
+      - name: Load External Packages
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
         run: |
@@ -163,7 +149,6 @@ jobs:
         run: |
           echo "⚙️ Applying custom configuration..."
           
-          # 复制 .config
           if [ -f ../config/.config ]; then
             cp ../config/.config .config
             echo "✅ .config copied"
@@ -171,17 +156,12 @@ jobs:
             echo "⚠️  .config not found, using default"
           fi
           
-          # 运行自定义脚本
           if [ -f ../config/customize.sh ]; then
             echo "🔧 Running customize.sh..."
             bash ../config/customize.sh
           else
             echo "⚠️  customize.sh not found, skipping"
           fi
-
-      # ==========================================
-      # 编译阶段
-      # ==========================================
 
       - name: Make defconfig and download sources
         if: steps.compare.outputs.should_build == 'true'
@@ -193,29 +173,23 @@ jobs:
           echo "📥 Downloading sources..."
           make download -j$(nproc) || make download -j1 V=s
           
-          # 检查下载是否完整
           make -j1 V=s download 2>&1 | tail -20
 
       - name: Build OpenWrt x86_64
         if: steps.compare.outputs.should_build == 'true'
         working-directory: ./openwrt
         env:
-          # Rust 编译优化参数
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           CARGO_HTTP_MULTIPLEXING: "false"
           CARGO_HTTP_TIMEOUT: "300"
           RUSTUP_DIST_SERVER: "https://mirrors.ustc.edu.cn/rust-static"
           RUSTUP_UPDATE_ROOT: "https://mirrors.ustc.edu.cn/rust-static/rustup"
-          # 内存限制
           CARGO_BUILD_JOBS: 2
-          MAKE_JOBS: $(nproc)
         run: |
           echo "🚀 Starting build with $(nproc) threads..."
           
-          # 设置编译环境
           export FORCE_UNSAFE_CONFIGURE=1
           
-          # 尝试并行编译，如果失败则单线程详细输出
           time make -j$(nproc) || {
             echo "⚠️ Parallel build failed, retrying with single thread..."
             time make -j1 V=s
@@ -223,7 +197,6 @@ jobs:
           
           echo "✅ Build completed!"
 
-      # 保存编译缓存
       - name: Save build cache
         if: steps.compare.outputs.should_build == 'true'
         uses: actions/cache/save@v4
@@ -260,8 +233,6 @@ jobs:
             🎉 OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
             
             📅 构建时间：${{ steps.buildtime.outputs.time }}
-            
-            🏗️ 目标架构：${{ matrix.target }}
             
             🔗 上游源码：https://github.com/openwrt/openwrt/tree/${{ steps.get_latest_tag.outputs.latest_tag }}
             
