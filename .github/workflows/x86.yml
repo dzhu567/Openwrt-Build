@@ -1,4 +1,4 @@
-name: x86_64 Build
+name:  x86_64 Build
 
 on:
   workflow_dispatch:
@@ -8,52 +8,169 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get latest OpenWrt tag
+      - name: Restore last built version cache
+        id: cache-version
+        uses: actions/cache/restore@v4
+        with:
+          path: last_build_version.txt
+          key: last-build-version
+          restore-keys: |
+            last-build-version
+
+      - name: Get latest OpenWrt stable release tag
         id: get_latest_tag
         run: |
           TAG=$(curl -s "https://api.github.com/repos/openwrt/openwrt/tags" | jq -r '.[0].name')
           echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $TAG"
 
       - name: Compare versions
         id: compare
         run: |
-          if [ -f last_build_version.txt ]; then
+          if [ ! -f last_build_version.txt ]; then
+            LAST_VER="none"
+          else
             LAST_VER=$(cat last_build_version.txt)
-            LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-            if [ "$LAST_VER" = "$LATEST_TAG" ]; then
-              echo "should_build=false" >> $GITHUB_OUTPUT
-            else
-              echo "should_build=true" >> $GITHUB_OUTPUT
-            fi
+          fi
+          LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
+          echo "Last version: $LAST_VER"
+          echo "Latest version: $LATEST_TAG"
+          if [ "$LAST_VER" = "$LATEST_TAG" ]; then
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "No new version, skipping build"
           else
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "New version found, proceeding with build"
           fi
 
-      - name: Build skipped
+      - name: Build skipped notice
         if: steps.compare.outputs.should_build == 'false'
-        run: echo "Skipping build"
+        run: echo "Build skipped: ${{ steps.get_latest_tag.outputs.latest_tag }} already built."
+
+      - name: Free up disk space
+        if: steps.compare.outputs.should_build == 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Show available disk space
+        if: steps.compare.outputs.should_build == 'true'
+        run: |
+          df -h
+          free -h
 
       - name: Install dependencies
         if: steps.compare.outputs.should_build == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+        run: sudo apt-get update && sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev rsync unzip zlib1g-dev file wget python3 python3-pyelftools ccache
 
-      - name: Clone source
+      - name: Set up Go
+        if: steps.compare.outputs.should_build == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Clone OpenWrt source
         if: steps.compare.outputs.should_build == 'true'
         run: |
           TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git
+          echo "Cloning OpenWrt tag: $TAG"
+          git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo "OpenWrt source cloned"
 
-      - name: Build
+      - name: Restore build cache
+        if: steps.compare.outputs.should_build == 'true'
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/build_dir
+            openwrt/staging_dir
+            ~/.ccache
+          key: openwrt-build-${{ runner.os }}-${{ steps.get_latest_tag.outputs.latest_tag }}
+          restore-keys: |
+            openwrt-build-${{ runner.os }}-
+
+      - name: Load custom Feeds
         if: steps.compare.outputs.should_build == 'true'
         run: |
-          cd openwrt
-          echo "Build would start here"
+          if [ -f scripts/check_feeds.sh ]; then
+            bash scripts/check_feeds.sh
+          fi
+
+      - name: Load External Packages
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          if [ -f ../scripts/ext_packages.sh ]; then
+            bash ../scripts/ext_packages.sh
+          fi
+
+      - name: Apply Custom Configuration
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          if [ -f ../config/.config ]; then
+            cp ../config/.config .config
+          fi
+          if [ -f ../config/customize.sh ]; then
+            bash ../config/customize.sh
+          fi
+
+      - name: Make defconfig and download sources
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          make defconfig
+          make download -j$(nproc) || make download -j1
+
+      - name: Build OpenWrt x86_64
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Get build time
+        if: steps.compare.outputs.should_build == 'true'
+        id: buildtime
+        run: |
+          echo "time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
+      - name: List build artifacts
+        if: steps.compare.outputs.should_build == 'true'
+        working-directory: ./openwrt
+        run: find bin/targets/x86/64 -name "*.img.gz" | xargs ls -lh
+
+      - name: Create GitHub Release
+        if: steps.compare.outputs.should_build == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.IGH_TOKEN }}
+          tag: ${{ steps.get_latest_tag.outputs.latest_tag }}
+          name: OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
+          body: |
+            OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
+            Build time: ${{ steps.buildtime.outputs.time }}
+            Source: https://github.com/openwrt/openwrt/tree/${{ steps.get_latest_tag.outputs.latest_tag }}
+          artifacts: "openwrt/bin/targets/x86/64/*.img.gz"
+          skipIfReleaseExists: true
+
+      - name: Save latest built version
+        if: steps.compare.outputs.should_build == 'true'
+        run: echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > last_build_version.txt
