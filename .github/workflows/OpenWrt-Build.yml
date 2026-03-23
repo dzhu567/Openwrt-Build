@@ -1,4 +1,4 @@
-name: OpenWrt x86_64 Build
+name: OpenWrt x86 Build
 
 on:
   workflow_dispatch:
@@ -8,223 +8,86 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Restore last built version cache
-        id: cache-version
-        uses: actions/cache/restore@v4
-        with:
-          path: last_build_version.txt
-          key: last-build-version
-          restore-keys: |
-            last-build-version
-
-      - name: Get latest OpenWrt stable release tag
+      - name: Get latest OpenWrt tag
         id: get_latest_tag
         run: |
-          LATEST_TAG=$(curl -s "https://api.github.com/repos/openwrt/openwrt/tags" | jq -r '.[0].name')
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          echo "Latest tag: $LATEST_TAG"
+          TAG=$(curl -s "https://api.github.com/repos/openwrt/openwrt/tags" | jq -r '.[0].name')
+          echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $TAG"
 
-      - name: Compare versions
-        id: compare
+      - name: Check previous build
+        id: check_build
         run: |
-          if [ ! -f last_build_version.txt ]; then
-            LAST_VER="none"
+          if [ -f last_build.txt ]; then
+            OLD_TAG=$(cat last_build.txt)
+            echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
+            if [ "$OLD_TAG" = "${{ steps.get_latest_tag.outputs.latest_tag }}" ]; then
+              echo "build_needed=no" >> $GITHUB_OUTPUT
+            else
+              echo "build_needed=yes" >> $GITHUB_OUTPUT
+            fi
           else
-            LAST_VER=$(cat last_build_version.txt)
-          fi
-          
-          LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          echo "Last version: $LAST_VER"
-          echo "Latest version: $LATEST_TAG"
-          
-          if [ "$LAST_VER" = "$LATEST_TAG" ]; then
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "No new version, skipping build"
-          else
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "New version found, proceeding with build"
+            echo "build_needed=yes" >> $GITHUB_OUTPUT
+            echo "old_tag=none" >> $GITHUB_OUTPUT
           fi
 
       - name: Build skipped notice
-        if: steps.compare.outputs.should_build == 'false'
-        run: echo "Build skipped: ${{ steps.get_latest_tag.outputs.latest_tag }} already built."
-
-      - name: Free up disk space
-        if: steps.compare.outputs.should_build == 'true'
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
-
-      - name: Show available disk space
-        if: steps.compare.outputs.should_build == 'true'
+        if: steps.check_build.outputs.build_needed == 'no'
         run: |
-          df -h
-          free -h
+          echo "Build skipped: ${{ steps.get_latest_tag.outputs.latest_tag }} already built."
+          echo "Previous build: ${{ steps.check_build.outputs.old_tag }}"
 
-      - name: Install dependencies
-        if: steps.compare.outputs.should_build == 'true'
-        run: sudo apt-get update && sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev rsync unzip zlib1g-dev file wget python3 python3-pyelftools ccache ash gperf help2man time xsltproc zlib1g-dev libxml-parser-perl libyaml-perl
+      - name: Install build dependencies
+        if: steps.check_build.outputs.build_needed == 'yes'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-pyelftools rsync unzip wget zlib1g-dev
 
-      - name: Set up Go
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-          cache: false
-
-      - name: Clone OpenWrt source
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Clone OpenWrt
+        if: steps.check_build.outputs.build_needed == 'yes'
         run: |
           TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
-          echo "Cloning OpenWrt tag: $TAG"
           git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git openwrt
-          cd openwrt
-          echo "OpenWrt source cloned at: $(pwd)"
+          echo "Cloned OpenWrt $TAG"
 
-      - name: Restore build cache
-        if: steps.compare.outputs.should_build == 'true'
-        id: cache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            openwrt/dl
-            openwrt/build_dir
-            openwrt/staging_dir
-            ~/.ccache
-          key: openwrt-build-${{ runner.os }}-${{ steps.get_latest_tag.outputs.latest_tag }}
-          restore-keys: |
-            openwrt-build-${{ runner.os }}-
-
-      - name: Load custom Feeds
-        if: steps.compare.outputs.should_build == 'true'
-        run: |
-          if [ -f scripts/check_feeds.sh ]; then
-            echo "Loading custom feeds..."
-            bash scripts/check_feeds.sh
-          else
-            echo "check_feeds.sh not found, skipping"
-          fi
-
-      - name: Load External Packages
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Prepare build
+        if: steps.check_build.outputs.build_needed == 'yes'
         working-directory: ./openwrt
         run: |
-          if [ -f ../scripts/ext_packages.sh ]; then
-            echo "Loading external packages..."
-            bash ../scripts/ext_packages.sh
-          else
-            echo "ext_packages.sh not found, skipping"
-          fi
-
-      - name: Apply Custom Configuration
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
-        run: |
-          echo "Applying custom configuration..."
-          if [ -f ../config/.config ]; then
-            cp ../config/.config .config
-            echo ".config copied"
-          else
-            echo ".config not found, using default"
-          fi
-          if [ -f ../config/customize.sh ]; then
-            echo "Running customize.sh..."
-            bash ../config/customize.sh
-          else
-            echo "customize.sh not found, skipping"
-          fi
-
-      - name: Make defconfig and download sources
-        if: steps.compare.outputs.should_build == 'true'
-        working-directory: ./openwrt
-        run: |
-          echo "Running defconfig..."
           make defconfig
-          echo "Downloading sources..."
-          make download -j$(nproc) || make download -j1 V=s
-          make -j1 V=s download 2>&1 | tail -20
+          echo "Configuration complete"
 
-      - name: Build OpenWrt x86_64
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Download sources
+        if: steps.check_build.outputs.build_needed == 'yes'
         working-directory: ./openwrt
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          CARGO_HTTP_MULTIPLEXING: "false"
-          CARGO_HTTP_TIMEOUT: "300"
-          CARGO_BUILD_JOBS: 2
         run: |
-          echo "Starting build with $(nproc) threads..."
-          export FORCE_UNSAFE_CONFIGURE=1
-          time make -j$(nproc) || {
-            echo "Parallel build failed, retrying with single thread..."
-            time make -j1 V=s
-          }
-          echo "Build completed!"
+          make download -j$(nproc) || make download -j1
+          echo "Sources downloaded"
 
-      - name: Save build cache
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            openwrt/dl
-            openwrt/build_dir
-            openwrt/staging_dir
-            ~/.ccache
-          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
-
-      - name: Get build time
-        if: steps.compare.outputs.should_build == 'true'
-        id: buildtime
+      - name: Build firmware
+        if: steps.check_build.outputs.build_needed == 'yes'
+        working-directory: ./openwrt
         run: |
-          echo "time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-          echo "date=$(date '+%Y%m%d')" >> $GITHUB_OUTPUT
+          echo "Starting build..."
+          make -j$(nproc) || make -j1 V=s
+          echo "Build complete"
 
-      - name: List build artifacts
-        if: steps.compare.outputs.should_build == 'true'
+      - name: Show artifacts
+        if: steps.check_build.outputs.build_needed == 'yes'
         working-directory: ./openwrt
         run: |
           echo "Build artifacts:"
-          find bin/targets/x86/64 -name "*.img.gz" -o -name "*.manifest" -o -name "*.buildinfo" | xargs ls -lh
+          find bin/targets/x86/64 -name "*.img.gz" 2>/dev/null | xargs -r ls -lh || echo "No images found"
 
-      - name: Create GitHub Release and upload firmware
-        if: steps.compare.outputs.should_build == 'true'
-        uses: ncipollo/release-action@v1
-        with:
-          token: ${{ secrets.IGH_TOKEN }}
-          tag: ${{ steps.get_latest_tag.outputs.latest_tag }}
-          name: OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
-          body: |
-            OpenWrt x86_64 ${{ steps.get_latest_tag.outputs.latest_tag }}
-            Build time: ${{ steps.buildtime.outputs.time }}
-            Source: https://github.com/openwrt/openwrt/tree/${{ steps.get_latest_tag.outputs.latest_tag }}
-            Workflow: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          artifacts: "openwrt/bin/targets/x86/64/*.img.gz,openwrt/bin/targets/x86/64/*.manifest,openwrt/bin/targets/x86/64/*.buildinfo"
-          makeLatest: true
-          skipIfReleaseExists: true
-          allowUpdates: true
-
-      - name: Save latest built version
-        if: steps.compare.outputs.should_build == 'true'
-        run: echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > last_build_version.txt
-
-      - name: Save last built version cache
-        if: steps.compare.outputs.should_build == 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: last_build_version.txt
-          key: last-build-version-${{ github.run_id }}
+      - name: Save build info
+        if: steps.check_build.outputs.build_needed == 'yes'
+        run: |
+          echo "${{ steps.get_latest_tag.outputs.latest_tag }}" > last_build.txt
+          echo "Saved build info: ${{ steps.get_latest_tag.outputs.latest_tag }}"
