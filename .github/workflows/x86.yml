@@ -1,22 +1,59 @@
-name: OpenWrt Build
+name: OpenWrt x86_64 Build
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 3'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get latest tag
-        id: get_tag
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Get latest OpenWrt tag
+        id: get_latest_tag
         run: |
           TAG=$(curl -s "https://api.github.com/repos/openwrt/openwrt/tags" | jq -r '.[0].name')
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Compare versions
+        id: compare
+        run: |
+          if [ -f last_build_version.txt ]; then
+            LAST_VER=$(cat last_build_version.txt)
+            LATEST_TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
+            if [ "$LAST_VER" = "$LATEST_TAG" ]; then
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            else
+              echo "should_build=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build skipped
+        if: steps.compare.outputs.should_build == 'false'
+        run: echo "Skipping build"
+
+      - name: Install dependencies
+        if: steps.compare.outputs.should_build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
       - name: Clone source
+        if: steps.compare.outputs.should_build == 'true'
         run: |
-          git clone --depth=1 --branch "${{ steps.get_tag.outputs.tag }}" https://github.com/openwrt/openwrt.git
+          TAG="${{ steps.get_latest_tag.outputs.latest_tag }}"
+          git clone --depth=1 --branch "$TAG" https://github.com/openwrt/openwrt.git
+
+      - name: Build
+        if: steps.compare.outputs.should_build == 'true'
+        run: |
+          cd openwrt
+          echo "Build would start here"
