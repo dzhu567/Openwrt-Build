@@ -1,0 +1,22 @@
+name: OpenWrt Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          TAG=$(curl -s "https://api.github.com/repos/openwrt/openwrt/tags" | jq -r '.[0].name')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Clone source
+        run: |
+          git clone --depth=1 --branch "${{ steps.get_tag.outputs.tag }}" https://github.com/openwrt/openwrt.git
