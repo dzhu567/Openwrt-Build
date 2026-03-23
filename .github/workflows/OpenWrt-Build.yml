@@ -182,8 +182,6 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           CARGO_HTTP_MULTIPLEXING: "false"
           CARGO_HTTP_TIMEOUT: "300"
-          RUSTUP_DIST_SERVER: "https://mirrors.ustc.edu.cn/rust-static"
-          RUSTUP_UPDATE_ROOT: "https://mirrors.ustc.edu.cn/rust-static/rustup"
           CARGO_BUILD_JOBS: 2
         run: |
           echo "🚀 Starting build with $(nproc) threads..."
