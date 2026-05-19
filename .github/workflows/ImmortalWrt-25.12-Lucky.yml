@@ -54,13 +54,18 @@ jobs:
           find . -name "lucky_*.ipk"
           find . -name "luci-app-lucky_*.ipk"
 
-      - name: 6. 整理文件并上传到 Release
+      - name: 6.5 复制文件到工作区
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/release_assets
+          cp sdk/bin/packages/x86_64/base/lucky_*.ipk $GITHUB_WORKSPACE/release_assets/
+          cp sdk/bin/packages/x86_64/luci/luci-app-lucky_*.ipk $GITHUB_WORKSPACE/release_assets/
+          cp sdk/bin/packages/x86_64/luci/luci-i18n-lucky-zh-cn_*.ipk $GITHUB_WORKSPACE/release_assets/
+
+      - name: 7. 上传 IPK 到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "lucky-v2.19.5-x86_64-25.12"
-          files: |
-            sdk/bin/packages/x86_64/base/lucky_*.ipk
-            sdk/bin/packages/x86_64/luci/luci-app-lucky_*.ipk
-            sdk/bin/packages/x86_64/luci/luci-i18n-lucky-zh-cn_*.ipk
+          # 这里直接指向复制后的目录
+          files: release_assets/*.ipk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
