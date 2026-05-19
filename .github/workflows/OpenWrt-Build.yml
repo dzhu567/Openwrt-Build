@@ -1,4 +1,4 @@
-name: ImmortalWrt-25.12-Lucky-APK
+name: Lucky-APK
 
 on:
   workflow_dispatch:
