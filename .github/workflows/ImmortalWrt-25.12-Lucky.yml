@@ -16,7 +16,7 @@ jobs:
 
       - name: 拉取 ImmortalWrt 源码
         run: |
-          git clone --depth=1 -b openwrt-25.12 shturl.cc/dLJOUYckomwJwvGS13z21ZqY6yqSOd7b
+          git clone --depth=1 -b openwrt-25.12 https://github.com/immortalwrt/immortalwrt
           cd immortalwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
