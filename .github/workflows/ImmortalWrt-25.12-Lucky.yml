@@ -54,12 +54,27 @@ jobs:
           find . -name "lucky_*.ipk"
           find . -name "luci-app-lucky_*.ipk"
 
-      - name: 6.5 复制文件到工作区
+      - name: 6.5 查找并复制 IPK 文件到工作区
         run: |
+          echo "===== 开始查找生成的 IPK 文件 ====="
+          
+          # 创建输出目录
           mkdir -p $GITHUB_WORKSPACE/release_assets
-          cp sdk/bin/packages/x86_64/base/lucky_*.ipk $GITHUB_WORKSPACE/release_assets/
-          cp sdk/bin/packages/x86_64/luci/luci-app-lucky_*.ipk $GITHUB_WORKSPACE/release_assets/
-          cp sdk/bin/packages/x86_64/luci/luci-i18n-lucky-zh-cn_*.ipk $GITHUB_WORKSPACE/release_assets/
+          
+          # 使用 find 命令在整个 sdk 目录下找所有 ipk 文件，并打印出来
+          find sdk -name "*.ipk" -o -name "*.apk"
+          
+          echo "===== 开始复制文件 ====="
+          
+          # 复制 base 下的 lucky
+          cp sdk/bin/packages/x86_64/base/lucky_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ base/lucky 未找到"
+          
+          # 复制 luci 下的 app 和 i18n
+          cp sdk/bin/packages/x86_64/luci/luci-app-lucky_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ luci-app-lucky 未找到"
+          cp sdk/bin/packages/x86_64/luci/luci-i18n-lucky-zh-cn_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ luci-i18n-lucky 未找到"
+          
+          echo "===== 复制完成，查看 release_assets 目录内容 ====="
+          ls -l $GITHUB_WORKSPACE/release_assets/
 
       - name: 7. 上传 IPK 到 Release
         uses: softprops/action-gh-release@v2
