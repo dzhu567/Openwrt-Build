@@ -22,7 +22,7 @@ jobs:
         run: |
           echo "正在下载 SDK..."
           # 使用 GitHub Releases 镜像源（更稳定）
-          wget -O openwrt-sdk.tar.zst https://github.com/immortalwrt/immortalwrt/releases/download/25.12-SNAPSHOT/immortalwrt-sdk-x86-64_gcc-14.3.0-musl.Linux-x86_64.tar.zst
+          wget -O openwrt-sdk.tar.zst https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           
           # 解压 .zst 文件
           tar --zstd -xf openwrt-sdk.tar.zst
