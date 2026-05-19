@@ -14,7 +14,7 @@ jobs:
       - name: 下载 OpenWrt SDK（25.12 x86_64）
         run: |
           # 下载对应架构的 SDK（这里以 x86_64 为例）
-          wget -O https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          git clone https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           tar -xJf shturl.cc/pKKmcTBN
           mv openwrt-sdk-* openwrt-sdk
           cd openwrt-sdk
