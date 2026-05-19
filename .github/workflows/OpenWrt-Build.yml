@@ -1,7 +1,10 @@
-name: Lucky-APK
+name: ImmortalWrt-25.12-Lucky-APK-Release
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write   # 允许创建 Tag 和 Release
 
 env:
   SDK_URL: https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
@@ -12,6 +15,9 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Checkout（用于 git 操作）
+        uses: actions/checkout@v4
+
       - name: 安装依赖
         run: |
           sudo apt-get update
@@ -49,39 +55,48 @@ jobs:
           make package/lucky/lucky/compile -j$(nproc) V=s
           make package/lucky/luci-app-lucky/compile -j$(nproc) V=s
 
-      - name: 安装 apk-tools (v3) 用于 mkpkg
+      - name: 安装 apk-tools (v3)
         run: |
-          # Ubuntu 22.04 自带 apk-tools 通常偏旧，用静态版或 apt 新版
           sudo apt-get install -y apk-tools
 
-      - name: IPK → APK (OpenWrt 25.12 APKv3)
+      - name: IPK → APK
         run: |
           mkdir -p /tmp/apk_out
           find openwrt-sdk/bin -name "*.ipk" | while read ipk; do
             TMP=$(mktemp -d)
             cd "$TMP"
-            # ipk = ar archive
             ar x "$ipk"
-            # 解 data.tar.* 和 control.tar.*
             [ -f data.tar.gz ] && tar xzf data.tar.gz
             [ -f data.tar.xz ] && tar xJf data.tar.xz
             [ -f data.tar.zst ] && unzstd -c data.tar.zst | tar xf -
-            [ -f control.tar.gz ] && tar xzf control.tar.gz
             PKGNAME=$(basename "$ipk" | sed 's/_.*//')
-
-            # 用 apk mkpkg 生成 APKv3（无签名，安装用 --allow-untrusted）
+            VERSION=$(basename "$ipk" | grep -oP '(?<=_)[0-9].*(?=\.ipk)')
             apk mkpkg \
               --info name="$PKGNAME" \
-              --info version="$(basename "$ipk" | grep -oP '(?<=\_)[0-9].*(?=\.ipk)')" \
+              --info version="$VERSION" \
               -d . \
               -o "/tmp/apk_out/$(basename "$ipk" .ipk).apk"
             cd /
             rm -rf "$TMP"
           done
-          ls -lh /tmp/apk_out/
 
-      - name: 上传 APK
-        uses: actions/upload-artifact@v4
+      - name: 生成 Tag & Release
+        id: release
+        run: |
+          TAG="lucky-25.12-$(date +'%Y%m%d-%H%M%S')"
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: 发布 APK 到 Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: lucky-apk-immortalwrt-25.12
-          path: /tmp/apk_out/*.apk
+          tag_name: ${{ env.TAG }}
+          name: Lucky APK for ImmortalWrt 25.12
+          body: |
+            ✅ 自动构建 Lucky + LuCI
+            📦 适用于 ImmortalWrt 25.12 (APKv3)
+            🛠 x86_64 / GCC 14.3 / musl
+          files: /tmp/apk_out/*.apk
