@@ -49,21 +49,27 @@ jobs:
           echo "===== 编译完成，查看 ipk ====="
           find bin/packages/x86_64 -name "*.ipk"
 
-      - name: 6. IPK → APK 转换
+      - name: 6. IPK → APK 转换（修正版）
         run: |
           cd sdk/bin/packages/x86_64
           mkdir -p apk_out
-          for ipk in $(find . -name "*.ipk"); do
-            echo "处理 $ipk"
-            mkdir -p tmp && cd tmp
-            tar -xzf ../$ipk
-            tar -xzf data.tar.gz
-            tar -czf ../apk_out/$(basename $ipk .ipk).apk .
-            cd .. && rm -rf tmp
-          done
-          # 关键调试：检查 apk 是否生成
-          echo "===== 转换完成，查看 apk ====="
-          ls -ld apk_out/*.apk
+          echo "===== 当前目录文件 ====="
+          ls -l
+    
+    # 遍历所有 ipk
+         for ipk in *.ipk; do
+         if [ -f "$ipk" ]; then
+         echo "处理: $ipk"
+         mkdir -p tmp && cd tmp
+         tar -xzf ../"$ipk"
+         tar -xzf ./data.tar.gz
+         tar -czf ../apk_out/"${ipk%.ipk}.apk" .
+         cd .. && rm -rf tmp
+         fi
+         done
+    
+         echo "===== 转换完成，查看 APK ====="
+         ls -l apk_out/
 
       - name: 7. 上传 APK 到 Release（修复路径）
         uses: softprops/action-gh-release@v2
