@@ -18,7 +18,6 @@ jobs:
 
       - name: 2. 下载 ImmortalWrt 25.12 SDK (x86_64)
         run: |
-          # 注意：这里使用的是你截图里的 25.12 版本 SDK
           wget -O openwrt-sdk.tar.zst https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           tar --zstd -xf openwrt-sdk.tar.zst
           mv immortalwrt-sdk-* sdk
@@ -26,13 +25,11 @@ jobs:
       - name: 3. 添加 Lucky 源码
         run: |
           cd sdk
-          # 克隆 Lucky 源码
           git clone https://github.com/gdy666/luci-app-lucky.git package/lucky
 
       - name: 4. 配置编译选项
         run: |
           cd sdk
-          # 生成 .config 文件
           cat > .config << EOF
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -40,47 +37,36 @@ jobs:
           CONFIG_PACKAGE_luci-app-lucky=y
           CONFIG_PACKAGE_luci-i18n-lucky-zh-cn=y
           EOF
-          # 应用配置
           make defconfig
 
-      - name: 5. 开始编译 Lucky
+      - name: 5. 开始编译 Lucky (详细日志)
         run: |
           cd sdk
-          # 编译 lucky 包
+          # 编译并输出详细日志，方便排查
           make package/lucky/compile -j$(nproc) V=s
-          
-          echo "===== 编译完成，查找生成的文件 ====="
-          # 查找 ipk 文件
-          find . -name "lucky_*.ipk"
-          find . -name "luci-app-lucky_*.ipk"
 
-      - name: 6.5 查找并复制 IPK 文件到工作区
+      - name: 6. 查找并复制 Lucky 相关的 IPK 文件
         run: |
-          echo "===== 开始查找生成的 IPK 文件 ====="
+          echo "===== 开始查找所有生成的 IPK 文件 ====="
+          # 查找所有 ipk 文件，并过滤出 lucky 相关的
+          find sdk -name "*.ipk" | grep -E "(lucky|lucky-app|lucky-i18n)" || echo "⚠️ 未找到 Lucky 相关的 IPK 文件"
           
-          # 创建输出目录
+          echo "===== 开始复制 Lucky 相关的 IPK 文件 ====="
           mkdir -p $GITHUB_WORKSPACE/release_assets
           
-          # 使用 find 命令在整个 sdk 目录下找所有 ipk 文件，并打印出来
-          find sdk -name "*.ipk" -o -name "*.apk"
+          # 复制所有匹配 lucky 的 ipk 文件
+          find sdk -name "*.ipk" | grep -E "(lucky|lucky-app|lucky-i18n)" | while read -r file; do
+            echo "复制文件: $file"
+            cp "$file" $GITHUB_WORKSPACE/release_assets/
+          done
           
-          echo "===== 开始复制文件 ====="
-          
-          # 复制 base 下的 lucky
-          cp sdk/bin/packages/x86_64/base/lucky_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ base/lucky 未找到"
-          
-          # 复制 luci 下的 app 和 i18n
-          cp sdk/bin/packages/x86_64/luci/luci-app-lucky_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ luci-app-lucky 未找到"
-          cp sdk/bin/packages/x86_64/luci/luci-i18n-lucky-zh-cn_*.ipk $GITHUB_WORKSPACE/release_assets/ || echo "⚠️ luci-i18n-lucky 未找到"
-          
-          echo "===== 复制完成，查看 release_assets 目录内容 ====="
-          ls -l $GITHUB_WORKSPACE/release_assets/
+          echo "===== release_assets 目录内容 ====="
+          ls -la $GITHUB_WORKSPACE/release_assets/
 
       - name: 7. 上传 IPK 到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "lucky-v2.19.5-x86_64-25.12"
-          # 这里直接指向复制后的目录
           files: release_assets/*.ipk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
