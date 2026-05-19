@@ -1,4 +1,4 @@
-name: Build Lucky APK (最终无错版)
+name: Build Lucky APK (最终稳定版)
 on:
   workflow_dispatch:
 
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      - name: 1. 安装依赖
+      - name: 1. 安装基础依赖
         run: |
           sudo apt update
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
@@ -46,18 +46,12 @@ jobs:
           echo "===== 编译完成，查找所有 ipk ====="
           find . -name "*.ipk"
 
-      - name: 6. IPK → APK 转换（强制路径）
+      - name: 6. IPK → APK 转换（稳定版）
         run: |
-          # 直接用 find 找 ipk，保存到数组
-          IPKS=($(find sdk -name "*.ipk"))
-          echo "找到的 ipk 文件: ${IPKS[@]}"
-          
-          # 创建输出目录
+          # 直接用 find 找 ipk，避免路径问题
           mkdir -p apk_out
-          
-          # 遍历转换
-          for ipk in "${IPKS[@]}"; do
-            echo "正在转换: $ipk"
+          find sdk -name "*.ipk" | while read -r ipk; do
+            echo "转换: $ipk"
             mkdir -p tmp && cd tmp
             tar -xzf "$OLDPWD/$ipk"
             tar -xzf ./data.tar.gz
@@ -75,6 +69,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "lucky-2.19.5-25.12"
-          files: *.apk
+          files: "*.apk"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
