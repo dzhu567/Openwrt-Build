@@ -27,7 +27,7 @@ jobs:
           cd immortalwrt
           mkdir -p package/lean && cd package/lean
           # 克隆Lucky包，添加重试
-          git clone https://github.com/gdy666/lucky || {
+          git clone https://github.com/gdy666/luci-app-lucky || {
             echo "Lucky克隆失败，重试..."
             git clone shturl.cc/7v1sqyFyDWbLhW1ynyQj8
           }
