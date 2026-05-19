@@ -1,5 +1,4 @@
-name: Build Lucky APK (SDK 版，无工具链错误)
-
+name: Build Lucky APK (SDK 版，带调试)
 on:
   workflow_dispatch:
 
@@ -11,90 +10,66 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      - name: 1. 安装基础依赖（含 zstd 解压支持）
+      - name: 1. 安装基础依赖
         run: |
           sudo apt update
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl tar \
-          zstd  # 关键：25.12 SDK 多为 .tar.zst 格式，必须安装 zstd
+          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl tar zstd
 
-      - name: 2. 下载 ImmortalWrt 25.12 x86_64 SDK（使用 GitHub 镜像源）
+      - name: 2. 下载 SDK
         run: |
-          echo "正在下载 SDK..."
-          # 使用 GitHub Releases 镜像源（更稳定）
           wget -O openwrt-sdk.tar.zst https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-          
-          # 解压 .zst 文件
           tar --zstd -xf openwrt-sdk.tar.zst
-          
-          # 重命名为 sdk 目录
           mv immortalwrt-sdk-* sdk
-          ls -l sdk  # 检查是否解压成功
-          cd sdk
+          ls -ld sdk
 
-      - name: 3. 添加 Lucky 源码（官方路径）
+      - name: 3. 添加 Lucky
         run: |
           cd sdk
-          # 确保 package 目录存在
-          mkdir -p package
-          # 克隆源码
           git clone https://github.com/gdy666/luci-app-lucky.git package/lucky
+          ls -ld package/lucky
 
-      - name: 4. 配置编译选项
+      - name: 4. 配置编译
         run: |
           cd sdk
-          # 生成默认配置
-          make defconfig
-          
-          # 手动启用 Lucky 组件
-          # 注意：这里假设你只需要 lucky 和 luci-app-lucky，如果需要其他依赖请自行添加
-          echo "CONFIG_TARGET_x86=y" >> .config
-          echo "CONFIG_TARGET_x86_64=y" >> .config
-          echo "CONFIG_PACKAGE_lucky=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-lucky-zh-cn=y" >> .config
-          
-          # 再次确认配置
+          cat > .config << EOF
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_PACKAGE_lucky=y
+          CONFIG_PACKAGE_luci-app-lucky=y
+          CONFIG_PACKAGE_luci-i18n-lucky-zh-cn=y
+          EOF
           make defconfig
 
-      - name: 5. 编译 Lucky
+      - name: 5. 编译 Lucky（关键步骤，看日志）
         run: |
           cd sdk
-          # 使用多线程编译，-j$(nproc) 自动根据 CPU 核心数调整
           make package/lucky/compile -j$(nproc) V=s
+          # 关键调试：检查是否生成 ipk
+          echo "===== 编译完成，查看 ipk ====="
+          find bin/packages/x86_64 -name "*.ipk"
 
-      - name: 6. IPK → APK 转换（仅用 tar）
+      - name: 6. IPK → APK 转换
         run: |
           cd sdk/bin/packages/x86_64
           mkdir -p apk_out
-          
-          # 遍历所有 .ipk 文件
-          for ipk in *.ipk; do
-            if [ -f "$ipk" ]; then
-              echo "正在处理: $ipk"
-              mkdir -p tmp && cd tmp
-              
-              # 解压 ipk (ipk 本质是 tar.gz)
-              tar -xzf ../"$ipk"
-              
-              # 解压 data.tar.gz
-              tar -xzf ./data.tar.gz -C ./
-              
-              # 重新打包为 .apk (这里只是改名，实际不是标准 APK)
-              # 如果你需要真正的 APK，可能需要更复杂的工具链，但在 OpenWrt 环境下，这通常是为了绕过某些限制
-              tar -czf ../apk_out/"${ipk%.ipk}.apk" .
-              
-              cd .. && rm -rf tmp
-            fi
+          for ipk in $(find . -name "*.ipk"); do
+            echo "处理 $ipk"
+            mkdir -p tmp && cd tmp
+            tar -xzf ../$ipk
+            tar -xzf data.tar.gz
+            tar -czf ../apk_out/$(basename $ipk .ipk).apk .
+            cd .. && rm -rf tmp
           done
-          
-          # 查看生成的 apk
-          ls -l apk_out/
+          # 关键调试：检查 apk 是否生成
+          echo "===== 转换完成，查看 apk ====="
+          ls -ld apk_out/*.apk
 
-      - name: 7. 上传 APK 到 GitHub Release
+      - name: 7. 上传 APK 到 Release（修复路径）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "lucky-2.19.5-25.12"
-          files: sdk/bin/packages/x86_64/apk_out/*.apk
+          files: |
+            sdk/bin/packages/x86_64/apk_out/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
