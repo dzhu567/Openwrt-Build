@@ -15,7 +15,7 @@ jobs:
       - name: 拉取 ImmortalWrt 源码
         run: |
           # 浅克隆加速，添加重试
-          git clone --depth=1 -b openwrt-25.12 shturl.cc/FQ1ZgzGL69sPwxdU9mqOkkpgEF9V8U7k || {
+          git clone --depth=1 -b openwrt-25.12 https://github.com/immortalwrt/immortalwrt || {
             echo "首次克隆失败，重试..."
             git clone --depth=1 -b openwrt-25.12 shturl.cc/FQ1ZgzGL69sPwxdU9mqOkkpgEF9V8U7k
           }
@@ -27,7 +27,7 @@ jobs:
           cd immortalwrt
           mkdir -p package/lean && cd package/lean
           # 克隆Lucky包，添加重试
-          git clone shturl.cc/7v1sqyFyDWbLhW1ynyQj8 || {
+          git clone https://github.com/gdy666/lucky || {
             echo "Lucky克隆失败，重试..."
             git clone shturl.cc/7v1sqyFyDWbLhW1ynyQj8
           }
