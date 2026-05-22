@@ -1,0 +1,82 @@
+name: Build Nginx 1.18 + PHP 7.4 for ImmortalWrt x86_64
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 安装基础依赖
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl tar zstd
+
+      - name: 下载 ImmortalWrt 25.12 SDK
+        run: |
+          wget -O sdk.tar.zst https://downloads.immortalwrt.org/releases/25.12.0-rc2/targets/x86/64/immortalwrt-sdk-25.12.0-rc2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          tar --zstd -xf sdk.tar.zst
+          mv immortalwrt-sdk-* sdk
+
+      - name: 拉取 OpenWrt 21.02 分支源码（含 php7 + nginx）
+        run: |
+          cd sdk/package
+          git clone --depth 1 --branch openwrt-21.02 https://github.com/openwrt/packages.git openwrt-21.02-packages
+          cp -r openwrt-21.02-packages/net/nginx ./
+          cp -r openwrt-21.02-packages/lang/php7 ./
+          rm -rf openwrt-21.02-packages
+
+      - name: 强制修改 Nginx Makefile，指定源码地址
+        run: |
+          cd sdk/package/nginx
+          # 修改版本号
+          sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=1.18.0/' Makefile
+          sed -i 's/^PKG_RELEASE:=.*/PKG_RELEASE:=11/' Makefile
+          # 替换源码地址为 Nginx 官方地址，避免 OpenWrt 镜像 404
+          sed -i 's/^PKG_SOURCE_URL:=.*/PKG_SOURCE_URL:=https:\/\/nginx.org\/download/' Makefile
+          # 强制指定源码包名称
+          sed -i 's/^PKG_SOURCE:=.*/PKG_SOURCE:=nginx-1.18.0.tar.gz/' Makefile
+          # 强制指定校验和（官方源码包的正确 sha256）
+          sed -i 's/^PKG_HASH:=.*/PKG_HASH:=95fb326e1fcc4b1d0e647972d78030b22354de83d70c8c3afb347808707a9a43/' Makefile
+
+      - name: 预下载 Nginx 1.18.0 源码包到 SDK dl 目录
+        run: |
+          cd sdk
+          mkdir -p dl
+          wget -O dl/nginx-1.18.0.tar.gz https://nginx.org/download/nginx-1.18.0.tar.gz
+
+      - name: 配置编译选项
+        run: |
+          cd sdk
+          cat > .config << EOF
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_PACKAGE_nginx=y
+          CONFIG_PACKAGE_nginx-ssl=y
+          CONFIG_PACKAGE_php7=y
+          CONFIG_PACKAGE_php7-fpm=y
+          CONFIG_PACKAGE_php7-cli=y
+          EOF
+          make defconfig
+
+      - name: 编译 Nginx + PHP7
+        run: |
+          cd sdk
+          make package/nginx/compile V=s -j$(nproc)
+          make package/php7/compile V=s -j$(nproc)
+
+      - name: 收集 IPK 包
+        run: |
+          mkdir -p release_assets
+          find sdk/bin/x86_64/packages/ -name "nginx*.ipk" -o -name "php7*.ipk" | xargs -I {} cp {} release_assets/
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "nginx-1.18-php7.4-x86_64"
+          files: release_assets/*.ipk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
