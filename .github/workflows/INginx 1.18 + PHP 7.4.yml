@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 安装依赖
+      - name: 安装基础依赖
         run: |
           sudo apt update
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
@@ -21,21 +21,24 @@ jobs:
           tar --zstd -xf sdk.tar.zst
           mv immortalwrt-sdk-* sdk
 
-      - name: 下载旧版 Nginx 1.18 与 PHP7 源码
+      - name: 拉取 OpenWrt 21.02 分支源码（含 php7 + nginx 1.18）
         run: |
           cd sdk/package
-          git clone https://github.com/openwrt/packages.git old-packages
-          mv old-packages/net/nginx .
-          mv old-packages/lang/php7 .
-          rm -rf old-packages
+          # 直接克隆 21.02 分支，这是最后包含 php7 的稳定分支
+          git clone --depth 1 --branch openwrt-21.02 https://github.com/openwrt/packages.git openwrt-21.02-packages
+          # 复制 nginx 和 php7 到 SDK 的 package 目录
+          cp -r openwrt-21.02-packages/net/nginx ./
+          cp -r openwrt-21.02-packages/lang/php7 ./
+          rm -rf openwrt-21.02-packages
 
-      - name: 锁定 Nginx 到 1.18 版本
+      - name: 锁定 Nginx 版本为 1.18.0
         run: |
           cd sdk/package/nginx
-          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.18.0/' Makefile
-          sed -i 's/PKG_RELEASE:=.*/PKG_RELEASE:=11/' Makefile
+          # 强制修改 Makefile 中的版本号
+          sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=1.18.0/' Makefile
+          sed -i 's/^PKG_RELEASE:=.*/PKG_RELEASE:=11/' Makefile
 
-      - name: 配置编译
+      - name: 配置编译选项
         run: |
           cd sdk
           cat > .config << EOF
@@ -49,21 +52,21 @@ jobs:
           EOF
           make defconfig
 
-      - name: 开始编译 Nginx + PHP7
+      - name: 编译 Nginx + PHP7
         run: |
           cd sdk
           make package/nginx/compile V=s -j$(nproc)
           make package/php7/compile V=s -j$(nproc)
 
-      - name: 收集所有 IPK 安装包
+      - name: 收集 IPK 包
         run: |
-          mkdir -p release
-          find sdk/bin -name "*.ipk" | grep -E "nginx|php7" | xargs -I {} cp {} release/
+          mkdir -p release_assets
+          find sdk/bin/x86_64/packages/ -name "nginx*.ipk" -o -name "php7*.ipk" | xargs -I {} cp {} release_assets/
 
-      - name: 发布编译好的 IPK 安装包
+      - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "nginx-1.18-php7-x86_64"
-          files: release/*.ipk
+          tag_name: "nginx-1.18-php7.4-x86_64"
+          files: release_assets/*.ipk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
