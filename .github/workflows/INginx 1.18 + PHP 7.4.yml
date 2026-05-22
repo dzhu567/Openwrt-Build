@@ -21,22 +21,32 @@ jobs:
           tar --zstd -xf sdk.tar.zst
           mv immortalwrt-sdk-* sdk
 
-      - name: 拉取 OpenWrt 21.02 分支源码（含 php7 + nginx 1.18）
+      - name: 拉取 OpenWrt 21.02 分支源码（含 php7 + nginx）
         run: |
           cd sdk/package
-          # 直接克隆 21.02 分支，这是最后包含 php7 的稳定分支
           git clone --depth 1 --branch openwrt-21.02 https://github.com/openwrt/packages.git openwrt-21.02-packages
-          # 复制 nginx 和 php7 到 SDK 的 package 目录
           cp -r openwrt-21.02-packages/net/nginx ./
           cp -r openwrt-21.02-packages/lang/php7 ./
           rm -rf openwrt-21.02-packages
 
-      - name: 锁定 Nginx 版本为 1.18.0
+      - name: 强制修改 Nginx Makefile，指定源码地址
         run: |
           cd sdk/package/nginx
-          # 强制修改 Makefile 中的版本号
+          # 修改版本号
           sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=1.18.0/' Makefile
           sed -i 's/^PKG_RELEASE:=.*/PKG_RELEASE:=11/' Makefile
+          # 替换源码地址为 Nginx 官方地址，避免 OpenWrt 镜像 404
+          sed -i 's/^PKG_SOURCE_URL:=.*/PKG_SOURCE_URL:=https:\/\/nginx.org\/download/' Makefile
+          # 强制指定源码包名称
+          sed -i 's/^PKG_SOURCE:=.*/PKG_SOURCE:=nginx-1.18.0.tar.gz/' Makefile
+          # 强制指定校验和（官方源码包的正确 sha256）
+          sed -i 's/^PKG_HASH:=.*/PKG_HASH:=95fb326e1fcc4b1d0e647972d78030b22354de83d70c8c3afb347808707a9a43/' Makefile
+
+      - name: 预下载 Nginx 1.18.0 源码包到 SDK dl 目录
+        run: |
+          cd sdk
+          mkdir -p dl
+          wget -O dl/nginx-1.18.0.tar.gz https://nginx.org/download/nginx-1.18.0.tar.gz
 
       - name: 配置编译选项
         run: |
